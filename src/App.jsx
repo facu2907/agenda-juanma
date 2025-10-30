@@ -62,14 +62,12 @@ function* slotIteratorBySchedule(dateStr) {
   const [sh, sm] = rule.start.split(":").map(Number);
   const [eh, em] = rule.end.split(":").map(Number);
 
-  // Creamos fechas en local TZ y luego usamos su valor en UTC para iterar
   const startLocal = new Date(baseLocal);
   startLocal.setHours(sh, sm, 0, 0);
   const endLocal = new Date(baseLocal);
   endLocal.setHours(eh, em, 0, 0);
 
   for (let t = new Date(startLocal); t < endLocal; t = new Date(t.getTime() + SLOT_MINUTES * 60000)) {
-    // t está en hora local; para formatear correctamente usamos fmtTime (con TZ)
     yield t;
   }
 }
@@ -124,12 +122,26 @@ export default function App() {
       tz: TIMEZONE,
     };
 
-    // Simular reserva OK (acá iría tu fetch a /api/book)
-    await new Promise((r) => setTimeout(r, 600));
+    // ✅ Enviar mensaje a Telegram (usa parse_mode HTML en la función serverless)
+    const msg =
+      `💈 <b>Nueva reserva</b>\n` +
+      `📅 <b>${payload.date}</b> — <b>${payload.time}</b>\n` +
+      `👤 ${payload.name}\n` +
+      `📞 ${payload.phone}\n` +
+      `✂️ ${payload.serviceId}\n` +
+      `📝 ${payload.notes || "-"}`;
+
+    fetch("/api/send-telegram", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: msg }),
+    }).catch(() => {});
+
     setResult({
       ok: true,
       message: `✅ Reservado ${payload.date} ${payload.time} con ${BARBER_LABEL} — ${payload.name}`,
     });
+
     setSelectedSlot(null);
     setNotes("");
     setSending(false);
@@ -244,3 +256,4 @@ export default function App() {
     </div>
   );
 }
+
