@@ -1,4 +1,4 @@
-import { db } from "./_firebase";
+import { db } from "./_firebase.js";
 
 async function sendTelegram({ date, time, name, phone, serviceId, notes }) {
   try {
