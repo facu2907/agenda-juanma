@@ -1,31 +1,32 @@
-import * as admin from "firebase-admin";
+// api/_firebase.js
+import { Firestore } from "@google-cloud/firestore";
 
-function getPrivateKey() {
-  const raw = process.env.FIREBASE_PRIVATE_KEY || "";
-  // Soporta tanto el formato con \n como multilínea real
-  if (raw.includes("\\n")) return raw.replace(/\\n/g, "\n");
-  return raw;
+// Lee envs (usa "" para evitar undefined)
+const projectId = process.env.FIREBASE_PROJECT_ID ?? "";
+const clientEmail = process.env.FIREBASE_CLIENT_EMAIL ?? "";
+const privateKeyRaw = process.env.FIREBASE_PRIVATE_KEY ?? "";
+
+// Valida antes de tocar nada (así no hay "reading length")
+if (!projectId || !clientEmail || !privateKeyRaw) {
+  // Mensaje claro para ver en logs de Vercel qué falta
+  throw new Error(
+    `Missing Firebase envs -> ` +
+      `FIREBASE_PROJECT_ID:${Boolean(projectId)} ` +
+      `FIREBASE_CLIENT_EMAIL:${Boolean(clientEmail)} ` +
+      `FIREBASE_PRIVATE_KEY:${Boolean(privateKeyRaw)}`
+  );
 }
 
-if (!admin.apps.length) {
-  const projectId = process.env.FIREBASE_PROJECT_ID;
-  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
-  const privateKey = getPrivateKey();
+// Normaliza \n si la clave está cargada en una sola línea
+const privateKey = privateKeyRaw.includes("\\n")
+  ? privateKeyRaw.replace(/\\n/g, "\n")
+  : privateKeyRaw;
 
-  if (!projectId || !clientEmail || !privateKey) {
-    throw new Error("Firebase env vars missing (PROJECT_ID / CLIENT_EMAIL / PRIVATE_KEY).");
-  }
-
-  admin.initializeApp({
-    credential: admin.credential.cert({
-      projectId,
-      clientEmail,
-      privateKey,
-    }),
-  });
-
-  // Evita errores con undefineds
-  admin.firestore().settings({ ignoreUndefinedProperties: true });
-}
-
-export const db = admin.firestore();
+// Inicializa Firestore
+export const db = new Firestore({
+  projectId,
+  credentials: {
+    client_email: clientEmail,
+    private_key: privateKey,
+  },
+});
