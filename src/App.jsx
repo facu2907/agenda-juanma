@@ -1,12 +1,11 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import "./index.css";
 
-// Config
+/* ===================== Config ===================== */
 const TIMEZONE = "America/Montevideo";
 const SLOT_MINUTES = 30;
 
-// Horarios por día
-// sunday = 0 ... saturday = 6 (según Date.getDay() en zona local)
+// 0=domingo ... 6=sábado
 const SCHEDULE = {
   1: { start: "09:30", end: "19:00" }, // lunes
   2: { start: "09:30", end: "19:00" }, // martes
@@ -14,7 +13,7 @@ const SCHEDULE = {
   4: { start: "09:30", end: "19:00" }, // jueves
   5: { start: "09:30", end: "19:00" }, // viernes
   6: { start: "09:00", end: "14:00" }, // sábado
-  0: null,                              // domingo cerrado
+  0: null, // domingo cerrado
 };
 
 const SERVICES = [
@@ -23,11 +22,10 @@ const SERVICES = [
   { id: "combo", label: "Corte + Barba", minutes: 50 },
 ];
 
-// Solo un barbero
 const BARBER_ID = "juanma";
 const BARBER_LABEL = "Juanma";
 
-// Utils
+/* ===================== Utils ===================== */
 function toLocalISODate(d = new Date()) {
   const tzDate = new Date(d.toLocaleString("en-US", { timeZone: TIMEZONE }));
   const y = tzDate.getFullYear();
@@ -36,26 +34,34 @@ function toLocalISODate(d = new Date()) {
   return `${y}-${m}-${day}`;
 }
 
-function fmtTime(dateUTC) {
-  return dateUTC.toLocaleTimeString([], {
+function fmtTime(dateObj) {
+  return dateObj.toLocaleTimeString([], {
     timeZone: TIMEZONE,
     hour: "2-digit",
     minute: "2-digit",
   });
 }
 
+// "HH:MM" en 24h
+function toHHMM(dateObj) {
+  const tz = new Date(dateObj.toLocaleString("en-US", { timeZone: TIMEZONE }));
+  const hh = String(tz.getHours()).padStart(2, "0");
+  const mm = String(tz.getMinutes()).padStart(2, "0");
+  return `${hh}:${mm}`;
+}
+
 function localMidnight(dateStr) {
   const [y, m, d] = dateStr.split("-").map(Number);
-  // construimos una fecha a medianoche local de TIMEZONE en UTC
-  const local = new Date(`${y}-${String(m).padStart(2,"0")}-${String(d).padStart(2,"0")}T00:00:00`);
-  // compensamos usando toLocaleString para la zona objetivo
-  const tz = new Date(local.toLocaleString("en-US", { timeZone: TIMEZONE }));
-  return tz;
+  const local = new Date(
+    `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}T00:00:00`
+  );
+  // “local” en TZ objetivo
+  return new Date(local.toLocaleString("en-US", { timeZone: TIMEZONE }));
 }
 
 function* slotIteratorBySchedule(dateStr) {
   const baseLocal = localMidnight(dateStr);
-  const dow = baseLocal.getDay(); // 0=domingo ... 6=sábado en zona local
+  const dow = baseLocal.getDay(); // 0=dom ... 6=sáb
   const rule = SCHEDULE[dow];
   if (!rule) return; // cerrado
 
@@ -67,42 +73,62 @@ function* slotIteratorBySchedule(dateStr) {
   const endLocal = new Date(baseLocal);
   endLocal.setHours(eh, em, 0, 0);
 
-  for (let t = new Date(startLocal); t < endLocal; t = new Date(t.getTime() + SLOT_MINUTES * 60000)) {
+  for (
+    let t = new Date(startLocal);
+    t < endLocal;
+    t = new Date(t.getTime() + SLOT_MINUTES * 60000)
+  ) {
     yield t;
   }
 }
 
-// mock reservas existentes (si luego guardás en una DB, reemplazás esto)
-const mockExisting = {};
-function getKey(dateStr, barberId) {
-  return `${dateStr}:${barberId}`;
-}
-function isSlotTaken(dateStr, barberId, slotUTC) {
-  const key = getKey(dateStr, barberId);
-  const arr = mockExisting[key] || [];
-  const timeStr = fmtTime(slotUTC);
-  return arr.includes(timeStr);
-}
-
+/* ===================== App ===================== */
 export default function App() {
   const [date, setDate] = useState(toLocalISODate());
   const [serviceId, setServiceId] = useState(SERVICES[0].id);
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [notes, setNotes] = useState("");
-  const [selectedSlot, setSelectedSlot] = useState(null);
+  const [selectedSlot, setSelectedSlot] = useState(null); // Date
+  const [selectedTime24, setSelectedTime24] = useState(""); // "HH:MM"
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState(null);
 
+  // turnos ocupados del día (por backend)
+  const [takenTimes, setTakenTimes] = useState([]); // ["09:30", "10:00", ...]
+
+  // slots teóricos del día
   const slots = useMemo(() => Array.from(slotIteratorBySchedule(date)), [date]);
-  const availableSlots = useMemo(
-    () => slots.filter((s) => !isSlotTaken(date, BARBER_ID, s)),
-    [slots, date]
-  );
+
+  // slots disponibles filtrando los ocupados
+  const availableSlots = useMemo(() => {
+    return slots.filter((s) => !takenTimes.includes(toHHMM(s)));
+  }, [slots, takenTimes]);
+
+  // cargar horarios ocupados cuando cambia la fecha
+  useEffect(() => {
+    async function fetchTaken(dateStr) {
+      try {
+        const r = await fetch(
+          `/api/bookings?date=${encodeURIComponent(dateStr)}&barberId=${encodeURIComponent(
+            BARBER_ID
+          )}`
+        );
+        const j = await r.json();
+        setTakenTimes(j.ok ? j.taken : []);
+      } catch (e) {
+        setTakenTimes([]);
+      }
+    }
+    fetchTaken(date);
+  }, [date]);
 
   async function handleSubmit(e) {
     e.preventDefault();
-    if (!selectedSlot) return;
+    if (!selectedSlot) {
+      setResult({ ok: false, message: "Elegí un horario." });
+      return;
+    }
     if (!name || !phone) {
       setResult({ ok: false, message: "Completá nombre y teléfono." });
       return;
@@ -113,41 +139,55 @@ export default function App() {
 
     const payload = {
       date,
-      time: fmtTime(selectedSlot),
+      time: selectedTime24, // "HH:MM" exacto para el backend
       barberId: BARBER_ID,
       serviceId,
       name,
       phone,
       notes,
-      tz: TIMEZONE,
     };
 
-    // ✅ Enviar mensaje a Telegram (usa parse_mode HTML en la función serverless)
-    const msg =
-      `💈 <b>Nueva reserva</b>\n` +
-      `📅 <b>${payload.date}</b> — <b>${payload.time}</b>\n` +
-      `👤 ${payload.name}\n` +
-      `📞 ${payload.phone}\n` +
-      `✂️ ${payload.serviceId}\n` +
-      `📝 ${payload.notes || "-"}`;
+    try {
+      const r = await fetch("/api/book", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const j = await r.json();
 
-    fetch("/api/send-telegram", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: msg }),
-    }).catch(() => {});
+      if (j.ok) {
+        setResult({
+          ok: true,
+          message: `✅ Reservado ${date} ${fmtTime(selectedSlot)} con ${BARBER_LABEL} — ${name}`,
+        });
+        // limpiar selección
+        setSelectedSlot(null);
+        setSelectedTime24("");
+        setNotes("");
 
-    setResult({
-      ok: true,
-      message: `✅ Reservado ${payload.date} ${payload.time} con ${BARBER_LABEL} — ${payload.name}`,
-    });
+        // refrescar ocupados para que desaparezca el turno tomado
+        const rr = await fetch(
+          `/api/bookings?date=${encodeURIComponent(date)}&barberId=${encodeURIComponent(
+            BARBER_ID
+          )}`
+        );
+        const jj = await rr.json();
+        setTakenTimes(jj.ok ? jj.taken : []);
+      } else if (r.status === 409) {
+        setResult({
+          ok: false,
+          message: "Ese horario se ocupó recién. Elegí otro.",
+        });
+      } else {
+        setResult({ ok: false, message: "Error al reservar." });
+      }
+    } catch (err) {
+      setResult({ ok: false, message: "Error de red al reservar." });
+    }
 
-    setSelectedSlot(null);
-    setNotes("");
     setSending(false);
   }
 
-  // detectamos si el día es cerrado
   const isClosed = (() => {
     const d = localMidnight(date).getDay();
     return !SCHEDULE[d];
@@ -159,29 +199,30 @@ export default function App() {
       <p style={{ marginBottom: 16 }}>Lun–Vie 09:30–19:00 · Sáb 09:30–14:00 · Dom cerrado</p>
 
       <div style={{ display: "flex", gap: 20, alignItems: "flex-start" }}>
+        {/* Columna izquierda: formulario */}
         <div style={{ flex: 1 }}>
-          <label>📅 Fecha</label>
-          <input
-            type="date"
-            value={date}
-            onChange={(e) => setDate(e.target.value)}
-            style={{ width: "100%", marginBottom: 10, padding: 8 }}
-          />
-
-          <label>✂️ Servicio</label>
-          <select
-            value={serviceId}
-            onChange={(e) => setServiceId(e.target.value)}
-            style={{ width: "100%", marginBottom: 10, padding: 8 }}
-          >
-            {SERVICES.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.label}
-              </option>
-            ))}
-          </select>
-
           <form onSubmit={handleSubmit}>
+            <label>📅 Fecha</label>
+            <input
+              type="date"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+              style={{ width: "100%", marginBottom: 10, padding: 8 }}
+            />
+
+            <label>✂️ Servicio</label>
+            <select
+              value={serviceId}
+              onChange={(e) => setServiceId(e.target.value)}
+              style={{ width: "100%", marginBottom: 10, padding: 8 }}
+            >
+              {SERVICES.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.label}
+                </option>
+              ))}
+            </select>
+
             <label>🧑 Nombre</label>
             <input
               value={name}
@@ -214,7 +255,13 @@ export default function App() {
                 cursor: isClosed ? "not-allowed" : "pointer",
               }}
             >
-              {isClosed ? "Cerrado" : sending ? "Reservando..." : selectedSlot ? "Confirmar turno" : "Elegí un horario"}
+              {isClosed
+                ? "Cerrado"
+                : sending
+                ? "Reservando..."
+                : selectedSlot
+                ? "Confirmar turno"
+                : "Elegí un horario"}
             </button>
 
             {result && (
@@ -225,27 +272,40 @@ export default function App() {
           </form>
         </div>
 
+        {/* Columna derecha: horarios */}
         <div style={{ flex: 1 }}>
           <h3>⏰ Horarios disponibles</h3>
           {isClosed ? (
             <p style={{ color: "#b00" }}>Este día está cerrado.</p>
           ) : (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
-              {availableSlots.length === 0 && <p>No hay turnos disponibles.</p>}
-              {availableSlots.map((slot) => {
-                const time = fmtTime(slot);
-                const active = selectedSlot && fmtTime(selectedSlot) === time;
+              {slots.length === 0 && <p>No hay turnos configurados.</p>}
+              {slots.map((slot) => {
+                const label = fmtTime(slot);     // "01:30 p. m."
+                const hhmm = toHHMM(slot);       // "13:30"
+                const active =
+                  selectedSlot && toHHMM(selectedSlot) === hhmm;
+                const isTaken = takenTimes.includes(hhmm);
+
                 return (
                   <button
                     key={slot.toISOString()}
-                    onClick={() => setSelectedSlot(slot)}
+                    disabled={isTaken}
+                    onClick={() => {
+                      setSelectedSlot(slot);
+                      setSelectedTime24(hhmm);
+                    }}
                     style={{
                       padding: 10,
-                      background: active ? "#444" : "#ddd",
-                      color: active ? "#fff" : "#000",
+                      background: isTaken ? "#ddd" : active ? "#444" : "#eee",
+                      color: isTaken ? "#999" : active ? "#fff" : "#000",
+                      border: "1px solid #ccc",
+                      borderRadius: 6,
+                      cursor: isTaken ? "not-allowed" : "pointer",
+                      opacity: isTaken ? 0.5 : 1,
                     }}
                   >
-                    {time}
+                    {label}
                   </button>
                 );
               })}
@@ -256,4 +316,3 @@ export default function App() {
     </div>
   );
 }
-
