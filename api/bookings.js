@@ -1,22 +1,27 @@
 import { db } from "./_firebase.js";
 
 export default async function handler(req, res) {
-  if (req.method !== "GET") return res.status(405).json({ error: "Method not allowed" });
+  if (req.method !== "GET") {
+    return res.status(405).json({ ok: false });
+  }
 
   try {
-    const { date, barberId = "juanma" } = req.query || {};
-    if (!date) return res.status(400).json({ error: "Missing date" });
+    const { date, barberId } = req.query;
+    if (!date || !barberId) {
+      return res.status(400).json({ ok: false, error: "Missing params" });
+    }
 
     const snap = await db
       .collection("bookings")
       .where("date", "==", date)
-      .where("barber_id", "==", barberId)
-      .select("time")
+      .where("barberId", "==", barberId)
       .get();
 
-    const taken = snap.docs.map(d => d.get("time"));
-    res.status(200).json({ taken });
+    const taken = snap.docs.map((d) => d.data().time);
+
+    return res.status(200).json({ ok: true, taken });
   } catch (e) {
-    res.status(500).json({ error: String(e) });
+    console.error(e);
+    return res.status(500).json({ ok: false, error: String(e) });
   }
 }
