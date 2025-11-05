@@ -12,7 +12,7 @@ const SCHEDULE = {
   3: { start: "09:30", end: "19:00" }, // miércoles
   4: { start: "09:30", end: "19:00" }, // jueves
   5: { start: "09:30", end: "19:00" }, // viernes
-  6: { start: "09:00", end: "14:00" }, // sábado
+  6: { start: "09:00", end: "14:00" }, // sábado (si querés 09:30 cambiá a "09:30")
   0: null, // domingo cerrado
 };
 
@@ -123,9 +123,11 @@ export default function App() {
     fetchTaken(date);
   }, [date]);
 
+  // ====== handleSubmit corregido ======
   async function handleSubmit(e) {
     e.preventDefault();
-    if (!selectedSlot) {
+
+    if (!selectedSlot || !selectedTime24) {
       setResult({ ok: false, message: "Elegí un horario." });
       return;
     }
@@ -138,9 +140,9 @@ export default function App() {
     setResult(null);
 
     const payload = {
-      date,
-      time: selectedTime24, // "HH:MM" exacto para el backend
-      barberId: BARBER_ID,
+      date,                 // "YYYY-MM-DD"
+      time: selectedTime24, // "HH:MM" exacto (24h)
+      barberId: BARBER_ID,  // "juanma"
       serviceId,
       name,
       phone,
@@ -153,39 +155,39 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      const j = await r.json();
 
-      if (j.ok) {
-        setResult({
-          ok: true,
-          message: `✅ Reservado ${date} ${fmtTime(selectedSlot)} con ${BARBER_LABEL} — ${name}`,
-        });
-        // limpiar selección
-        setSelectedSlot(null);
-        setSelectedTime24("");
-        setNotes("");
-
-        // refrescar ocupados para que desaparezca el turno tomado
-        const rr = await fetch(
-          `/api/bookings?date=${encodeURIComponent(date)}&barberId=${encodeURIComponent(
-            BARBER_ID
-          )}`
-        );
-        const jj = await rr.json();
-        setTakenTimes(jj.ok ? jj.taken : []);
-      } else if (r.status === 409) {
-        setResult({
-          ok: false,
-          message: "Ese horario se ocupó recién. Elegí otro.",
-        });
+      // si el server responde 409, ya está ocupado
+      if (r.status === 409) {
+        setResult({ ok: false, message: "Ese horario se ocupó recién. Elegí otro." });
       } else {
-        setResult({ ok: false, message: "Error al reservar." });
+        const j = await r.json();
+        if (j.ok) {
+          setResult({
+            ok: true,
+            message: `✅ Reservado ${date} ${fmtTime(selectedSlot)} con ${BARBER_LABEL} — ${name}`,
+          });
+          // limpiar selección
+          setSelectedSlot(null);
+          setSelectedTime24("");
+          setNotes("");
+
+          // refrescar ocupados para que desaparezca el turno tomado
+          const rr = await fetch(
+            `/api/bookings?date=${encodeURIComponent(date)}&barberId=${encodeURIComponent(
+              BARBER_ID
+            )}`
+          );
+          const jj = await rr.json();
+          setTakenTimes(jj.ok ? jj.taken : []);
+        } else {
+          setResult({ ok: false, message: j.error || "Error al reservar." });
+        }
       }
     } catch (err) {
       setResult({ ok: false, message: "Error de red al reservar." });
+    } finally {
+      setSending(false);
     }
-
-    setSending(false);
   }
 
   const isClosed = (() => {
